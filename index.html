@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kanban Lite</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #f0f2f5;
+      --col-bg: #e2e6ea;
+      --card-bg: #ffffff;
+      --primary: #4f46e5;
+      --primary-hover: #4338ca;
+      --danger: #ef4444;
+      --danger-hover: #dc2626;
+      --text: #1e293b;
+      --text-muted: #64748b;
+      --radius: 10px;
+      --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+      --shadow-lg: 0 4px 12px rgba(0,0,0,.12);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: var(--primary);
+      color: #fff;
+      padding: 16px 20px;
+      text-align: center;
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -.3px;
+      box-shadow: var(--shadow);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .board {
+      display: flex;
+      gap: 16px;
+      padding: 20px;
+      flex: 1;
+      overflow-x: auto;
+      align-items: flex-start;
+    }
+
+    /* Mobile: stack columns vertically */
+    @media (max-width: 700px) {
+      .board {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 12px;
+        gap: 12px;
+      }
+      .column { min-height: auto; }
+    }
+
+    .column {
+      background: var(--col-bg);
+      border-radius: var(--radius);
+      min-width: 280px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 200px;
+      transition: background .2s;
+    }
+
+    .column.drag-over {
+      background: #c7d2fe;
+    }
+
+    .column-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px 10px;
+      font-weight: 700;
+      font-size: .95rem;
+      text-transform: uppercase;
+      letter-spacing: .4px;
+      color: var(--text-muted);
+    }
+
+    .column-header .count {
+      background: #cbd5e1;
+      color: var(--text);
+      font-size: .75rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+
+    .card-list {
+      flex: 1;
+      padding: 0 12px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 40px;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border-radius: 8px;
+      padding: 12px 14px;
+      box-shadow: var(--shadow);
+      cursor: grab;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      transition: box-shadow .15s, transform .15s;
+      word-break: break-word;
+      font-size: .925rem;
+      line-height: 1.45;
+    }
+
+    .card:active { cursor: grabbing; }
+
+    .card.dragging {
+      opacity: .45;
+      transform: scale(.97);
+    }
+
+    .card:hover {
+      box-shadow: var(--shadow-lg);
+    }
+
+    .card .delete-btn {
+      flex-shrink: 0;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 1.1rem;
+      padding: 0 2px;
+      line-height: 1;
+      border-radius: 4px;
+      transition: color .15s, background .15s;
+    }
+
+    .card .delete-btn:hover {
+      color: var(--danger);
+      background: #fee2e2;
+    }
+
+    .add-form {
+      padding: 0 12px 12px;
+      display: flex;
+      gap: 6px;
+    }
+
+    .add-form input {
+      flex: 1;
+      border: 1.5px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: .875rem;
+      outline: none;
+      transition: border-color .15s;
+    }
+
+    .add-form input:focus {
+      border-color: var(--primary);
+    }
+
+    .add-form button {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: .875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s;
+      white-space: nowrap;
+    }
+
+    .add-form button:hover {
+      background: var(--primary-hover);
+    }
+
+    /* Drop placeholder */
+    .drop-placeholder {
+      border: 2px dashed #a5b4fc;
+      border-radius: 8px;
+      min-height: 40px;
+      background: rgba(79,70,229,.06);
+      transition: all .15s;
+    }
+
+    /* Touch drag ghost */
+    .touch-ghost {
+      position: fixed;
+      pointer-events: none;
+      z-index: 1000;
+      opacity: .85;
+      transform: rotate(2deg);
+      box-shadow: var(--shadow-lg);
+    }
+  </style>
+</head>
+<body>
+
+<header>Kanban Lite</header>
+
+<div class="board" id="board"></div>
+
+<script>
+(() => {
+  const STORAGE_KEY = 'kanban-lite-data';
+
+  const defaultData = {
+    columns: [
+      { id: 'todo', title: 'Todo', cards: [] },
+      { id: 'in-progress', title: 'In Progress', cards: [] },
+      { id: 'done', title: 'Done', cards: [] }
+    ]
+  };
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return JSON.parse(JSON.stringify(defaultData));
+  }
+
+  function save() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+
+  let state = load();
+
+  const board = document.getElementById('board');
+
+  /* ---- Rendering ---- */
+  function render() {
+    board.innerHTML = '';
+    state.columns.forEach(col => {
+      const colEl = document.createElement('div');
+      colEl.className = 'column';
+      colEl.dataset.colId = col.id;
+
+      // Header
+      const header = document.createElement('div');
+      header.className = 'column-header';
+      header.innerHTML = `<span>${col.title}</span><span class="count">${col.cards.length}</span>`;
+      colEl.appendChild(header);
+
+      // Card list
+      const list = document.createElement('div');
+      list.className = 'card-list';
+      list.dataset.colId = col.id;
+
+      col.cards.forEach((card, idx) => {
+        const cardEl = document.createElement('div');
+        cardEl.className = 'card';
+        cardEl.draggable = true;
+        cardEl.dataset.cardId = card.id;
+        cardEl.dataset.colId = col.id;
+        cardEl.dataset.idx = idx;
+
+        const text = document.createElement('span');
+        text.textContent = card.text;
+
+        const del = document.createElement('button');
+        del.className = 'delete-btn';
+        del.title = 'Delete card';
+        del.innerHTML = '&times;';
+        del.addEventListener('click', (e) => {
+          e.stopPropagation();
+          deleteCard(col.id, card.id);
+        });
+
+        cardEl.appendChild(text);
+        cardEl.appendChild(del);
+
+        // Desktop drag
+        cardEl.addEventListener('dragstart', onDragStart);
+        cardEl.addEventListener('dragend', onDragEnd);
+
+        // Touch drag
+        cardEl.addEventListener('touchstart', onTouchStart, { passive: false });
+
+        list.appendChild(cardEl);
+      });
+
+      colEl.appendChild(list);
+
+      // Add form
+      const form = document.createElement('div');
+      form.className = 'add-form';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'Add a card...';
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') addCard(col.id, input);
+      });
+      const btn = document.createElement('button');
+      btn.textContent = '+ Add';
+      btn.addEventListener('click', () => addCard(col.id, input));
+      form.appendChild(input);
+      form.appendChild(btn);
+      colEl.appendChild(form);
+
+      // Desktop drop
+      colEl.addEventListener('dragover', onDragOver);
+      colEl.addEventListener('dragleave', onDragLeave);
+      colEl.addEventListener('drop', onDrop);
+
+      board.appendChild(colEl);
+    });
+  }
+
+  /* ---- Card CRUD ---- */
+  function addCard(colId, input) {
+    const text = input.value.trim();
+    if (!text) return;
+    const col = state.columns.find(c => c.id === colId);
+    col.cards.push({ id: uid(), text });
+    save();
+    render();
+  }
+
+  function deleteCard(colId, cardId) {
+    const col = state.columns.find(c => c.id === colId);
+    col.cards = col.cards.filter(c => c.id !== cardId);
+    save();
+    render();
+  }
+
+  function moveCard(fromColId, toColId, cardId, toIndex) {
+    const fromCol = state.columns.find(c => c.id === fromColId);
+    const toCol = state.columns.find(c => c.id === toColId);
+    const cardIdx = fromCol.cards.findIndex(c => c.id === cardId);
+    if (cardIdx === -1) return;
+    const [card] = fromCol.cards.splice(cardIdx, 1);
+    const insertAt = (toIndex != null && toIndex >= 0) ? Math.min(toIndex, toCol.cards.length) : toCol.cards.length;
+    toCol.cards.splice(insertAt, 0, card);
+    save();
+    render();
+  }
+
+  function uid() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  }
+
+  /* ---- Desktop Drag & Drop ---- */
+  let dragCardId = null;
+  let dragFromCol = null;
+
+  function onDragStart(e) {
+    dragCardId = e.target.dataset.cardId;
+    dragFromCol = e.target.dataset.colId;
+    e.target.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  }
+
+  function onDragEnd(e) {
+    e.target.classList.remove('dragging');
+    clearPlaceholders();
+    clearDragOver();
+    dragCardId = null;
+    dragFromCol = null;
+  }
+
+  function onDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const col = e.currentTarget;
+    col.classList.add('drag-over');
+
+    const list = col.querySelector('.card-list');
+    clearPlaceholders();
+
+    const afterEl = getDragAfterElement(list, e.clientY);
+    const placeholder = document.createElement('div');
+    placeholder.className = 'drop-placeholder';
+    if (afterEl) {
+      list.insertBefore(placeholder, afterEl);
+    } else {
+      list.appendChild(placeholder);
+    }
+  }
+
+  function onDragLeave(e) {
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      e.currentTarget.classList.remove('drag-over');
+      clearPlaceholders();
+    }
+  }
+
+  function onDrop(e) {
+    e.preventDefault();
+    const toColId = e.currentTarget.dataset.colId;
+    const list = e.currentTarget.querySelector('.card-list');
+    const placeholder = list.querySelector('.drop-placeholder');
+    let toIndex = null;
+    if (placeholder) {
+      const cards = [...list.querySelectorAll('.card')];
+      const phIdx = [...list.children].indexOf(placeholder);
+      // Count real cards before placeholder
+      let count = 0;
+      for (const child of list.children) {
+        if (child === placeholder) break;
+        if (child.classList.contains('card')) count++;
+      }
+      toIndex = count;
+    }
+    clearPlaceholders();
+    clearDragOver();
+    if (dragCardId) moveCard(dragFromCol, toColId, dragCardId, toIndex);
+  }
+
+  function getDragAfterElement(list, y) {
+    const cards = [...list.querySelectorAll('.card:not(.dragging)')];
+    let closest = null;
+    let closestOffset = Number.NEGATIVE_INFINITY;
+    cards.forEach(child => {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      if (offset < 0 && offset > closestOffset) {
+        closestOffset = offset;
+        closest = child;
+      }
+    });
+    return closest;
+  }
+
+  function clearPlaceholders() {
+    document.querySelectorAll('.drop-placeholder').forEach(el => el.remove());
+  }
+
+  function clearDragOver() {
+    document.querySelectorAll('.column.drag-over').forEach(el => el.classList.remove('drag-over'));
+  }
+
+  /* ---- Touch Drag & Drop ---- */
+  let touchDragEl = null;
+  let touchGhost = null;
+  let touchCardId = null;
+  let touchFromCol = null;
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let touchStarted = false;
+
+  function onTouchStart(e) {
+    const card = e.currentTarget;
+    touchCardId = card.dataset.cardId;
+    touchFromCol = card.dataset.colId;
+    const touch = e.touches[0];
+    touchStartX = touch.clientX;
+    touchStartY = touch.clientY;
+    touchStarted = false;
+    touchDragEl = card;
+
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('touchend', onTouchEnd);
+  }
+
+  function onTouchMove(e) {
+    e.preventDefault();
+    const touch = e.touches[0];
+    const dx = touch.clientX - touchStartX;
+    const dy = touch.clientY - touchStartY;
+
+    if (!touchStarted && Math.abs(dx) + Math.abs(dy) > 10) {
+      touchStarted = true;
+      touchDragEl.classList.add('dragging');
+      touchGhost = touchDragEl.cloneNode(true);
+      touchGhost.classList.add('touch-ghost');
+      touchGhost.style.width = touchDragEl.offsetWidth + 'px';
+      document.body.appendChild(touchGhost);
+    }
+
+    if (!touchStarted) return;
+
+    touchGhost.style.left = (touch.clientX - touchDragEl.offsetWidth / 2) + 'px';
+    touchGhost.style.top = (touch.clientY - 20) + 'px';
+
+    // Highlight column under finger
+    clearDragOver();
+    clearPlaceholders();
+    const elUnder = document.elementFromPoint(touch.clientX, touch.clientY);
+    if (elUnder) {
+      const col = elUnder.closest('.column');
+      if (col) {
+        col.classList.add('drag-over');
+        const list = col.querySelector('.card-list');
+        const afterEl = getDragAfterElement(list, touch.clientY);
+        const placeholder = document.createElement('div');
+        placeholder.className = 'drop-placeholder';
+        if (afterEl) {
+          list.insertBefore(placeholder, afterEl);
+        } else {
+          list.appendChild(placeholder);
+        }
+      }
+    }
+  }
+
+  function onTouchEnd(e) {
+    document.removeEventListener('touchmove', onTouchMove);
+    document.removeEventListener('touchend', onTouchEnd);
+
+    if (touchStarted && touchGhost) {
+      const ghostRect = touchGhost.getBoundingClientRect();
+      const cx = ghostRect.left + ghostRect.width / 2;
+      const cy = ghostRect.top + ghostRect.height / 2;
+      touchGhost.remove();
+      touchGhost = null;
+
+      const elUnder = document.elementFromPoint(cx, cy);
+      if (elUnder) {
+        const col = elUnder.closest('.column');
+        if (col) {
+          const list = col.querySelector('.card-list');
+          const placeholder = list.querySelector('.drop-placeholder');
+          let toIndex = null;
+          if (placeholder) {
+            let count = 0;
+            for (const child of list.children) {
+              if (child === placeholder) break;
+              if (child.classList.contains('card')) count++;
+            }
+            toIndex = count;
+          }
+          moveCard(touchFromCol, col.dataset.colId, touchCardId, toIndex);
+        }
+      }
+    }
+
+    if (touchDragEl) touchDragEl.classList.remove('dragging');
+    clearPlaceholders();
+    clearDragOver();
+    touchDragEl = null;
+    touchCardId = null;
+    touchFromCol = null;
+    touchStarted = false;
+  }
+
+  /* ---- Init ---- */
+  render();
+})();
+</script>
+</body>
+</html>
